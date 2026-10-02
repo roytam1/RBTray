@@ -26,11 +26,11 @@
 
 #define MAXTRAYITEMS 64
 
-// Windows 2000 tray struct size: the SDK's NOTIFYICONDATA_V2_SIZE is
-// expressed through guidItem (an XP+ member) in newer headers, so it won't
-// compile when the headers target 2000. V2 is the Win2000 struct version,
-// ending at dwInfoFlags -- compute that directly instead.
-#define NID_SIZE_V2 (FIELD_OFFSET(NOTIFYICONDATA, dwInfoFlags) + sizeof(DWORD))
+// Lowest-common tray struct size: shell32 before 5.0 (NT4 and older) only
+// understands V1, and newer headers express V2_SIZE through guidItem (an
+// XP+ member) that isn't even declared under low header targets. V1 works
+// on every shell version, so use it unconditionally (no NIM_SETVERSION).
+#define NID_SIZE_V1 (FIELD_OFFSET(NOTIFYICONDATA, szTip) + sizeof(((PNOTIFYICONDATA)0)->szTip))
 
 static UINT WM_TASKBAR_CREATED;
 
@@ -59,16 +59,15 @@ HICON GetWindowIcon(HWND hwnd) {
 static void AddToTray(int i) {
 	NOTIFYICONDATA nid;
 	ZeroMemory(&nid, sizeof(nid));
-	nid.cbSize           = NID_SIZE_V2;
+	nid.cbSize           = NID_SIZE_V1;
 	nid.hWnd             = _hwndHook;
 	nid.uID              = (UINT)i;
 	nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 	nid.uCallbackMessage = WM_TRAYCMD;
 	nid.hIcon            = GetWindowIcon(_hwndItems[i]);
 	GetWindowText(_hwndItems[i], nid.szTip, sizeof(nid.szTip) / sizeof(nid.szTip[0]));
-	nid.uVersion         = NOTIFYICON_VERSION;
+	// No NIM_SETVERSION: unversioned (V1) callbacks work on every shell.
 	Shell_NotifyIcon(NIM_ADD, &nid);
-	Shell_NotifyIcon(NIM_SETVERSION, &nid);
 }
 
 static void AddWindowToTray(HWND hwnd) {
@@ -78,6 +77,13 @@ static void AddWindowToTray(HWND hwnd) {
 	AddToTray(i);
 }
 
+// GetAncestor needs Windows 98/2000+ (headers and OS); resolve it at
+// runtime so the binary still loads on NT4.
+#ifndef GA_ROOT
+#define GA_ROOT 2
+#endif
+typedef HWND (WINAPI *GetAncestorFunc)(HWND hwnd, UINT gaFlags);
+
 static void MinimizeWindowToTray(HWND hwnd) {
 	// Don't minimize MDI child windows
 	if ((UINT)GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_MDICHILD) return;
@@ -85,7 +91,18 @@ static void MinimizeWindowToTray(HWND hwnd) {
 	// If hwnd is a child window, find parent window (e.g. minimize button in
 	// Office 2007 (ribbon interface) is in a child window)
 	if ((UINT)GetWindowLongPtr(hwnd, GWL_STYLE) & WS_CHILD) {
-		hwnd = GetAncestor(hwnd, GA_ROOT);
+		GetAncestorFunc pGetAncestor = (GetAncestorFunc)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "GetAncestor");
+		if (pGetAncestor) {
+			hwnd = pGetAncestor(hwnd, GA_ROOT);
+		}
+		else {
+			// NT4 fallback: walk up while still a child (== GA_ROOT).
+			HWND hParent;
+			while (((UINT)GetWindowLongPtr(hwnd, GWL_STYLE) & WS_CHILD) &&
+			       (hParent = GetParent(hwnd)) != NULL) {
+				hwnd = hParent;
+			}
+		}
 	}
 
 	// Add icon to tray if it's not already there
@@ -100,7 +117,7 @@ static void MinimizeWindowToTray(HWND hwnd) {
 static void RemoveFromTray(int i) {
 	NOTIFYICONDATA nid;
 	ZeroMemory(&nid, sizeof(nid));
-	nid.cbSize = NID_SIZE_V2;
+		nid.cbSize = NID_SIZE_V1;
 	nid.hWnd   = _hwndHook;
 	nid.uID    = (UINT)i;
 	Shell_NotifyIcon(NIM_DELETE, &nid);
@@ -142,7 +159,7 @@ void RefreshWindowInTray(HWND hwnd) {
 	else {
 		NOTIFYICONDATA nid;
 		ZeroMemory(&nid, sizeof(nid));
-		nid.cbSize = NID_SIZE_V2;
+	nid.cbSize = NID_SIZE_V1;
 		nid.hWnd   = _hwndHook;
 		nid.uID    = (UINT)i;
 		nid.uFlags = NIF_TIP;
@@ -225,10 +242,14 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 			break;
 		case WM_TRAYCMD:
 			switch ((UINT)lParam) {
+				// Unversioned icons report raw mouse messages; NIN_SELECT /
+				// WM_CONTEXTMENU only arrive with NIM_SETVERSION, kept too.
 				case NIN_SELECT:
+				case WM_LBUTTONUP:
 					RestoreWindowFromTray(_hwndItems[wParam]);
 					break;
 				case WM_CONTEXTMENU:
+				case WM_RBUTTONUP:
 					_hwndForMenu = _hwndItems[wParam];
 					ExecuteMenu();
 					break;
@@ -267,16 +288,21 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 #define ATTACH_PARENT_PROCESS ((DWORD)-1)
 #endif
 typedef BOOL (WINAPI *AttachConsoleFunc)(DWORD dwProcessId);
+// GetConsoleWindow needs Windows 2000+ (headers and OS); resolve it at
+// runtime too. On NT4 --console can only fail gracefully.
+typedef HWND (WINAPI *GetConsoleWindowFunc)(void);
 
 static HWND GetConsoleHwndForTray() {
-	HWND hwnd = GetConsoleWindow();
-	AttachConsoleFunc pAttachConsole;
+	HWND hwnd = NULL;
+	HMODULE hKernel = GetModuleHandle(L"kernel32.dll");
+	GetConsoleWindowFunc pGetConsoleWindow = (GetConsoleWindowFunc)GetProcAddress(hKernel, "GetConsoleWindow");
+	AttachConsoleFunc pAttachConsole = (AttachConsoleFunc)GetProcAddress(hKernel, "AttachConsole");
+	if (pGetConsoleWindow) hwnd = pGetConsoleWindow();
 	if (hwnd) return hwnd;
 	// RBTray is a Windows-subsystem exe, so it has no console of its own.
 	// Attach to the parent console (the cmd window that launched us) to find it.
-	pAttachConsole = (AttachConsoleFunc)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "AttachConsole");
 	if (pAttachConsole && pAttachConsole(ATTACH_PARENT_PROCESS)) {
-		hwnd = GetConsoleWindow();
+		if (pGetConsoleWindow) hwnd = pGetConsoleWindow();
 		FreeConsole();
 	}
 	return hwnd;

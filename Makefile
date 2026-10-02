@@ -22,12 +22,13 @@
 #   nmake rebuild   clean + build
 #   nmake help      show this help
 #
-# Older Windows: defaults target Windows 2000 and later (headers pinned to
-# 0x0500, /SUBSYSTEM:WINDOWS,5.0). A real Win2000 binary also needs a
-# VS2008-or-older toolchain: the VS2010+ static CRT calls EncodePointer,
-# missing on 2000. No x64 Win2000 exists, so build x64 with
-#   nmake SUBSYS_VER=5.02
-# (Server 2003 / XP x64 floor; XP x86 can use SUBSYS_VER=5.01).
+# Older Windows: defaults target Windows NT4 and later (headers 0x0400,
+# /SUBSYSTEM:WINDOWS,4.0). NT4 is x86-only; for x64 use
+#   nmake SUBSYS_VER=5.02 WINVER_HEX=0x0501
+# (Server 2003 / XP x64). Win2000 x86: SUBSYS_VER=5.0 WINVER_HEX=0x0500.
+# Toolchain floors still apply: VS2010+ CRT needs XP+ (EncodePointer), and
+# a VC2005 binary must pass a dumpbin check for GetLongPathNameW (NT4 lacks
+# it) -- run: dumpbin /imports RBTray.exe | findstr /i LongPath
 #
 # Requires cl/link/rc on PATH (e.g. vcvarsall.bat x86  or  x64).
 # RBHook.dll must remain next to RBTray.exe at runtime (LoadLibrary).
@@ -36,15 +37,20 @@ CC = cl
 RC = rc
 LINK = link
 
-CFLAGS_COMMON = /nologo /MT /W3 /O2 /Oi /Gy /GL /Zi /DWIN32 /DNDEBUG /D_WINDOWS /DUNICODE /D_UNICODE /DWINVER=0x0500 /D_WIN32_WINNT=0x0500 /D_WIN32_IE=0x0500
+!IFNDEF WINVER_HEX
+# 0x0400 = Windows NT4 floor. Win2000: 0x0500. XP: 0x0501.
+WINVER_HEX = 0x0400
+!ENDIF
+
+CFLAGS_COMMON = /nologo /MT /W3 /O2 /Oi /Gy /GL /Zi /DWIN32 /DNDEBUG /D_WINDOWS /DUNICODE /D_UNICODE /DWINVER=$(WINVER_HEX) /D_WIN32_WINNT=$(WINVER_HEX) /D_WIN32_IE=0x0500
 CFLAGS_EXE = $(CFLAGS_COMMON) /c
 CFLAGS_DLL = $(CFLAGS_COMMON) /D_USRDLL /DRBHOOK_EXPORTS /c
 
 RCFLAGS = /r
 
 !IFNDEF SUBSYS_VER
-# 5.0 = Windows 2000 floor (x86). Override per-arch from the command line.
-SUBSYS_VER = 5.0
+# 4.0 = Windows NT4 floor (x86). Override per-arch from the command line.
+SUBSYS_VER = 4.0
 !ENDIF
 
 LDFLAGS_COMMON = /NOLOGO /INCREMENTAL:NO /DEBUG /OPT:REF /OPT:ICF /LTCG /SUBSYSTEM:WINDOWS,$(SUBSYS_VER)
