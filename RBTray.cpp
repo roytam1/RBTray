@@ -24,6 +24,31 @@
 #include "rbtray.h"
 #include "resource.h"
 
+/* Shims for pre-2000 SDKs (back to MSVC 4.2): stable values and 32-bit
+   identities the old headers lack. Newer SDKs provide all of these, so
+   everything below is guarded and vanishes there. */
+#ifndef ICON_SMALL
+#define ICON_SMALL 0
+#endif
+#ifndef ICON_BIG
+#define ICON_BIG 1
+#endif
+#if !defined(GetClassLongPtr) && !defined(_WIN64)
+#define GetClassLongPtr GetClassLong
+#endif
+#if !defined(GetWindowLongPtr) && !defined(_WIN64)
+#define GetWindowLongPtr GetWindowLong
+#endif
+#ifndef GCLP_HICONSM
+#define GCLP_HICONSM (-34)
+#endif
+#ifndef GCLP_HICON
+#define GCLP_HICON (-14)
+#endif
+#ifndef NIN_SELECT
+#define NIN_SELECT (WM_USER + 0)
+#endif
+
 #define MAXTRAYITEMS 64
 
 // Lowest-common tray struct size: shell32 before 5.0 (NT4 and older) only
@@ -325,12 +350,22 @@ static BOOL ParseHwndArg(const char *s, HWND *out) {
 	char *end = NULL;
 	int base = 10;
 	if (buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X')) base = 16; // 0x... = hex, else decimal
+#if defined(_MSC_VER) && (_MSC_VER < 1300)
+	// No _strtoui64 this old; HWND is 32-bit on such targets anyway.
+	unsigned long val = strtoul(buf, &end, base);
+#else
 	unsigned __int64 val = _strtoui64(buf, &end, base);
+#endif
 	if (end == buf || *end != '\0' || val == 0) return FALSE;
 #ifndef _WIN64
 	if (val > 0xFFFFFFFF) return FALSE;
 #endif
+#ifdef _WIN64
 	*out = (HWND)(UINT_PTR)val;
+#else
+	// MSVC 4.2 has no UINT_PTR; HWND is 32-bit here anyway.
+	*out = (HWND)(unsigned long)val;
+#endif
 	return TRUE;
 }
 
@@ -377,6 +412,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine
 	MSG msg;
 	HWND pendingTargets[MAXTRAYITEMS];
 	int pendingCount = 0;
+	int i; // MSVC 4.2 has no for-scope: one counter shared by the loops below.
 
 	_hInstance = hInstance;
 	_hwndHook = FindWindow(NAME, NAME);
@@ -391,7 +427,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine
 			MessageBox(NULL, L"RBTray is already running.", L"RBTray", MB_OK | MB_ICONINFORMATION);
 			return 0;
 		}
-		for (int i = 0; i < n; i++) {
+		for (i = 0; i < n; i++) {
 			if (IsWindow(pendingTargets[i])) {
 				PostMessage(_hwndHook, WM_ADDTRAY, 0, (LPARAM)pendingTargets[i]);
 			}
@@ -432,10 +468,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine
 		MessageBox(NULL, L"Error creating window", L"RBTray", MB_OK | MB_ICONERROR);
 		return 0;
 	}
-	for (int i = 0; i < MAXTRAYITEMS; i++) {
+	for (i = 0; i < MAXTRAYITEMS; i++) {
 		_hwndItems[i] = NULL;
 	}
-	for (int i = 0; i < pendingCount; i++) {
+	for (i = 0; i < pendingCount; i++) {
 		if (IsWindow(pendingTargets[i])) {
 			MinimizeWindowToTray(pendingTargets[i]);
 		}
