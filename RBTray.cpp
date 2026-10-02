@@ -20,6 +20,7 @@
 // ****************************************************************************
 
 #include <windows.h>
+#include <stdlib.h>
 #include "rbtray.h"
 #include "resource.h"
 
@@ -253,20 +254,115 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+static HWND GetConsoleHwndForTray() {
+	HWND hwnd = GetConsoleWindow();
+	if (hwnd) return hwnd;
+	// RBTray is a Windows-subsystem exe, so it has no console of its own.
+	// Attach to the parent console (the cmd window that launched us) to find it.
+	if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+		hwnd = GetConsoleWindow();
+		FreeConsole();
+	}
+	return hwnd;
+}
+
+static BOOL ParseHwndArg(const char *s, HWND *out) {
+	char buf[32];
+	int len = 0;
+	while (*s == ' ' || *s == '\t') s++;
+	if (*s == '=' || *s == ':') {
+		s++;
+		while (*s == ' ' || *s == '\t') s++;
+	}
+	if (*s == '"') s++; // allow quoted value
+	while (*s && *s != ' ' && *s != '\t' && *s != '"' && len < (int)sizeof(buf) - 1) {
+		buf[len++] = *s++;
+	}
+	buf[len] = '\0';
+	if (len == 0) return FALSE;
+	char *end = NULL;
+	int base = 10;
+	if (buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X')) base = 16; // 0x... = hex, else decimal
+	unsigned __int64 val = _strtoui64(buf, &end, base);
+	if (end == buf || *end != '\0' || val == 0) return FALSE;
+#ifndef _WIN64
+	if (val > 0xFFFFFFFF) return FALSE;
+#endif
+	*out = (HWND)(UINT_PTR)val;
+	return TRUE;
+}
+
+static BOOL IsCmdBoundary(char c) {
+	return c == '\0' || c == ' ' || c == '\t' || c == '"';
+}
+
+// Collect --hwnd <val> (repeatable, "--hwnd=val" also ok) and --console targets.
+// Returns count in out[], 0 if none present, -1 on error (message already shown).
+static int CollectTrayTargets(LPSTR szCmdLine, HWND *out, int maxOut) {
+	int n = 0;
+	const char *p = szCmdLine;
+	while ((p = strstr(p, "--hwnd")) != NULL) {
+		if (p != szCmdLine && !IsCmdBoundary(p[-1])) { p += 6; continue; }
+		HWND hwnd = NULL;
+		if (!ParseHwndArg(p + 6, &hwnd) || !IsWindow(hwnd)) {
+			MessageBox(NULL, L"Invalid window handle for --hwnd. Use decimal or 0x-hex of a valid window.", L"RBTray", MB_OK | MB_ICONERROR);
+			return -1;
+		}
+		BOOL dup = FALSE;
+		for (int i = 0; i < n; i++) if (out[i] == hwnd) { dup = TRUE; break; }
+		if (!dup && n < maxOut) out[n++] = hwnd;
+		p += 6;
+	}
+	p = szCmdLine;
+	while ((p = strstr(p, "--console")) != NULL) {
+		if (p != szCmdLine && !IsCmdBoundary(p[-1])) { p += 9; continue; }
+		HWND hwnd = GetConsoleHwndForTray();
+		if (!hwnd || !IsWindow(hwnd)) {
+			MessageBox(NULL, L"No console window found for --console.", L"RBTray", MB_OK | MB_ICONERROR);
+			return -1;
+		}
+		BOOL dup = FALSE;
+		for (int i = 0; i < n; i++) if (out[i] == hwnd) { dup = TRUE; break; }
+		if (!dup && n < maxOut) out[n++] = hwnd;
+		p += 9;
+		break; // one console window only; extra --console flags add nothing
+	}
+	return n;
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine, int iCmdShow) {
 	WNDCLASS wc;
 	MSG msg;
+	HWND pendingTargets[MAXTRAYITEMS];
+	int pendingCount = 0;
 
 	_hInstance = hInstance;
 	_hwndHook = FindWindow(NAME, NAME);
 	if (_hwndHook) {
 		if (strstr(szCmdLine, "--exit")) {
 			SendMessage(_hwndHook, WM_CLOSE, 0, 0);
+			return 0;
 		}
-		else {
+		int n = CollectTrayTargets(szCmdLine, pendingTargets, MAXTRAYITEMS);
+		if (n < 0) return 0; // error already shown
+		if (n == 0) {
 			MessageBox(NULL, L"RBTray is already running.", L"RBTray", MB_OK | MB_ICONINFORMATION);
+			return 0;
+		}
+		for (int i = 0; i < n; i++) {
+			if (IsWindow(pendingTargets[i])) {
+				PostMessage(_hwndHook, WM_ADDTRAY, 0, (LPARAM)pendingTargets[i]);
+			}
 		}
 		return 0;
+	}
+	if (strstr(szCmdLine, "--exit")) {
+		return 0; // nothing running, nothing to exit; don't start daemon just to quit it
+	}
+	{
+		int n = CollectTrayTargets(szCmdLine, pendingTargets, MAXTRAYITEMS);
+		if (n < 0) n = 0; // error already shown; still start daemon, tray nothing
+		pendingCount = n;
 	}
 	if (!(_hLib = LoadLibrary(L"RBHook.dll"))) {
 		MessageBox(NULL, L"Error loading RBHook.dll.", L"RBTray", MB_OK | MB_ICONERROR);
@@ -296,6 +392,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine
 	}
 	for (int i = 0; i < MAXTRAYITEMS; i++) {
 		_hwndItems[i] = NULL;
+	}
+	for (int i = 0; i < pendingCount; i++) {
+		if (IsWindow(pendingTargets[i])) {
+			MinimizeWindowToTray(pendingTargets[i]);
+		}
 	}
 	WM_TASKBAR_CREATED = RegisterWindowMessage(L"TaskbarCreated");
 
