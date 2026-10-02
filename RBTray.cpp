@@ -254,12 +254,22 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+// AttachConsole exists only on Windows XP+, so resolve it at runtime: a
+// static import would stop the loader on Windows 2000. SDKs targeting
+// 2000 don't declare ATTACH_PARENT_PROCESS either, so fall back locally.
+#ifndef ATTACH_PARENT_PROCESS
+#define ATTACH_PARENT_PROCESS ((DWORD)-1)
+#endif
+typedef BOOL (WINAPI *AttachConsoleFunc)(DWORD dwProcessId);
+
 static HWND GetConsoleHwndForTray() {
 	HWND hwnd = GetConsoleWindow();
+	AttachConsoleFunc pAttachConsole;
 	if (hwnd) return hwnd;
 	// RBTray is a Windows-subsystem exe, so it has no console of its own.
 	// Attach to the parent console (the cmd window that launched us) to find it.
-	if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+	pAttachConsole = (AttachConsoleFunc)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "AttachConsole");
+	if (pAttachConsole && pAttachConsole(ATTACH_PARENT_PROCESS)) {
 		hwnd = GetConsoleWindow();
 		FreeConsole();
 	}

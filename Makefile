@@ -22,6 +22,13 @@
 #   nmake rebuild   clean + build
 #   nmake help      show this help
 #
+# Older Windows: defaults target Windows 2000 and later (headers pinned to
+# 0x0500, /SUBSYSTEM:WINDOWS,5.0). A real Win2000 binary also needs a
+# VS2008-or-older toolchain: the VS2010+ static CRT calls EncodePointer,
+# missing on 2000. No x64 Win2000 exists, so build x64 with
+#   nmake SUBSYS_VER=5.02
+# (Server 2003 / XP x64 floor; XP x86 can use SUBSYS_VER=5.01).
+#
 # Requires cl/link/rc on PATH (e.g. vcvarsall.bat x86  or  x64).
 # RBHook.dll must remain next to RBTray.exe at runtime (LoadLibrary).
 
@@ -29,13 +36,18 @@ CC = cl
 RC = rc
 LINK = link
 
-CFLAGS_COMMON = /nologo /MT /W3 /O2 /Oi /Gy /GL /Zi /DWIN32 /DNDEBUG /D_WINDOWS /DUNICODE /D_UNICODE
+CFLAGS_COMMON = /nologo /MT /W3 /O2 /Oi /Gy /GL /Zi /DWIN32 /DNDEBUG /D_WINDOWS /DUNICODE /D_UNICODE /DWINVER=0x0500 /D_WIN32_WINNT=0x0500 /D_WIN32_IE=0x0500
 CFLAGS_EXE = $(CFLAGS_COMMON) /c
 CFLAGS_DLL = $(CFLAGS_COMMON) /D_USRDLL /DRBHOOK_EXPORTS /c
 
 RCFLAGS = /nologo
 
-LDFLAGS_COMMON = /NOLOGO /INCREMENTAL:NO /DEBUG /OPT:REF /OPT:ICF /LTCG /SUBSYSTEM:WINDOWS
+!IFNDEF SUBSYS_VER
+# 5.0 = Windows 2000 floor (x86). Override per-arch from the command line.
+SUBSYS_VER = 5.0
+!ENDIF
+
+LDFLAGS_COMMON = /NOLOGO /INCREMENTAL:NO /DEBUG /OPT:REF /OPT:ICF /LTCG /SUBSYSTEM:WINDOWS,$(SUBSYS_VER)
 LDFLAGS_EXE = $(LDFLAGS_COMMON)
 LDFLAGS_DLL = $(LDFLAGS_COMMON) /DLL
 
@@ -69,4 +81,5 @@ help :
 	@echo   nmake           - build RBTray.exe + RBHook.dll (native arch)
 	@echo   nmake clean     - remove build outputs
 	@echo   nmake rebuild   - clean + build
+	@echo   nmake SUBSYS_VER=5.02 - x64 floor (no Win2000 x64 exists)
 	@echo Run from an x86 or x64 Native Tools prompt; arch follows cl.
