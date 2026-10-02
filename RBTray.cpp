@@ -26,6 +26,12 @@
 
 #define MAXTRAYITEMS 64
 
+// Windows 2000 tray struct size: the SDK's NOTIFYICONDATA_V2_SIZE is
+// expressed through guidItem (an XP+ member) in newer headers, so it won't
+// compile when the headers target 2000. V2 is the Win2000 struct version,
+// ending at dwInfoFlags -- compute that directly instead.
+#define NID_SIZE_V2 (FIELD_OFFSET(NOTIFYICONDATA, dwInfoFlags) + sizeof(DWORD))
+
 static UINT WM_TASKBAR_CREATED;
 
 static HINSTANCE _hInstance;
@@ -53,7 +59,7 @@ HICON GetWindowIcon(HWND hwnd) {
 static void AddToTray(int i) {
 	NOTIFYICONDATA nid;
 	ZeroMemory(&nid, sizeof(nid));
-	nid.cbSize           = NOTIFYICONDATA_V2_SIZE;
+	nid.cbSize           = NID_SIZE_V2;
 	nid.hWnd             = _hwndHook;
 	nid.uID              = (UINT)i;
 	nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
@@ -94,7 +100,7 @@ static void MinimizeWindowToTray(HWND hwnd) {
 static void RemoveFromTray(int i) {
 	NOTIFYICONDATA nid;
 	ZeroMemory(&nid, sizeof(nid));
-	nid.cbSize = NOTIFYICONDATA_V2_SIZE;
+	nid.cbSize = NID_SIZE_V2;
 	nid.hWnd   = _hwndHook;
 	nid.uID    = (UINT)i;
 	Shell_NotifyIcon(NIM_DELETE, &nid);
@@ -136,7 +142,7 @@ void RefreshWindowInTray(HWND hwnd) {
 	else {
 		NOTIFYICONDATA nid;
 		ZeroMemory(&nid, sizeof(nid));
-		nid.cbSize = NOTIFYICONDATA_V2_SIZE;
+		nid.cbSize = NID_SIZE_V2;
 		nid.hWnd   = _hwndHook;
 		nid.uID    = (UINT)i;
 		nid.uFlags = NIF_TIP;

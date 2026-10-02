@@ -40,7 +40,7 @@ CFLAGS_COMMON = /nologo /MT /W3 /O2 /Oi /Gy /GL /Zi /DWIN32 /DNDEBUG /D_WINDOWS 
 CFLAGS_EXE = $(CFLAGS_COMMON) /c
 CFLAGS_DLL = $(CFLAGS_COMMON) /D_USRDLL /DRBHOOK_EXPORTS /c
 
-RCFLAGS = /nologo
+RCFLAGS = /r
 
 !IFNDEF SUBSYS_VER
 # 5.0 = Windows 2000 floor (x86). Override per-arch from the command line.
